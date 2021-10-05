@@ -2,22 +2,21 @@
 #include "utils/exception.h"
 #include <array>
 
-void z_send(zmq::socket_t& socket, const std::string& str, int flags) {
+void z_send(zmq::socket_t& socket, const std::string& str, zmq::send_flags flags) {
     zmq::message_t msg(str.size());
     std::memcpy(msg.data(), str.c_str(), str.size());
     socket.send(msg, flags);
 }
 
-void z_send(zmq::socket_t& socket, zmq::message_t& msg, int flags) {
+void z_send(zmq::socket_t& socket, zmq::message_t& msg, zmq::send_flags flags) {
     socket.send(msg, flags);
 }
 
 std::string z_recv(zmq::socket_t& socket) {
     zmq::message_t msg;
-    socket.recv(&msg);
+    socket.recv(msg);
     return std::string(static_cast<char*>(msg.data()), msg.size());
 }
-
 
 LoadBalancer::LoadBalancer(zmq::context_t& context) : clients(context, ZMQ_ROUTER), workers(context, ZMQ_ROUTER) {}
 void LoadBalancer::bind(const std::string& clients_socket_path, const std::string& workers_socket_path) {
@@ -57,23 +56,23 @@ void LoadBalancer::run() {
                 }
                 // the actual reply
                 zmq::message_t reply;
-                workers.recv(&reply);
-                z_send(clients, client_addr, ZMQ_SNDMORE);
-                z_send(clients, "", ZMQ_SNDMORE);
+                workers.recv(reply);
+                z_send(clients, client_addr, zmq::send_flags::sndmore);
+                z_send(clients, "", zmq::send_flags::sndmore);
                 z_send(clients, reply);
             }
         }
         // handle clients request
-        if (items[1].revents & ZMQ_POLLIN){
-            // The client request is a multi-part ZMQ message, we have to check every frame and be sure the multi-part message frame
-            // is composed as we wish, otherwise the multi-part message may be shifted unexpectedly.
+        if (items[1].revents & ZMQ_POLLIN) {
+            // The client request is a multi-part ZMQ message, we have to check every frame and be sure the multi-part
+            // message frame is composed as we wish, otherwise the multi-part message may be shifted unexpectedly.
 
             // The multi-part ZMQ message should have 3 parts
             // The first one is the ID of message
             // The second one is an empty frame
             // The third one is the real request
             size_t more = 0;
-            size_t more_size = sizeof (more);
+            size_t more_size = sizeof(more);
 
             size_t nb_frames = 0;
             // there is no copy/move constructor in message_t in v2.2, which is the verison used by Jenkins...
@@ -81,17 +80,17 @@ void LoadBalancer::run() {
 
             do {
                 zmq::message_t frame{};
-                clients.recv(&frame);
+                clients.recv(frame);
 
                 if (nb_frames < 3) {
-                    frames[nb_frames].move(&frame);
+                    frames[nb_frames].move(frame);
                 }
                 // Are there more frames coming?
                 clients.getsockopt(ZMQ_RCVMORE, &more, &more_size);
                 nb_frames++;
             } while (more);
 
-            if (nb_frames > 3 || frames.at(1).size() != 0 ) {
+            if (nb_frames > 3 || frames.at(1).size() != 0) {
                 z_send(clients, "");
                 throw navitia::recoverable_exception{"bad ZMQ message has been received and ignored"};
             }
@@ -99,11 +98,11 @@ void LoadBalancer::run() {
             std::string worker_addr = avalailable_worker.top();
             avalailable_worker.pop();
 
-            z_send(workers, worker_addr, ZMQ_SNDMORE);
-            z_send(workers, "", ZMQ_SNDMORE);
+            z_send(workers, worker_addr, zmq::send_flags::sndmore);
+            z_send(workers, "", zmq::send_flags::sndmore);
             // frames[0] is the id of message
-            z_send(workers, frames[0], ZMQ_SNDMORE);
-            z_send(workers, "", ZMQ_SNDMORE);
+            z_send(workers, frames[0], zmq::send_flags::sndmore);
+            z_send(workers, "", zmq::send_flags::sndmore);
             // frames[2] is the request
             z_send(workers, frames[2]);
         }
